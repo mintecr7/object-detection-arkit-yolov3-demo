@@ -8,14 +8,16 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var state = AppState()
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        ZStack {
+            ARViewContainer(state: state)
+                .ignoresSafeArea()
+
+            BoxesOverlay(detections: state.detections)
+                .ignoresSafeArea()
         }
-        .padding()
     }
 }
 
