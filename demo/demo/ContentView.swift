@@ -12,15 +12,26 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            ARViewContainer(state: state)
-                .ignoresSafeArea()
+            ARViewContainer(state: state).ignoresSafeArea()
+            BoxesOverlay(detections: state.detections).ignoresSafeArea()
 
-            BoxesOverlay(detections: state.detections)
-                .ignoresSafeArea()
+            VStack {
+                HStack {
+                    Text("Detections: \(state.detections.count)")
+                        .padding(8)
+                        .background(.black.opacity(0.6))
+                        .foregroundStyle(.white)
+                        .cornerRadius(8)
+                    Spacer()
+                }
+                .padding()
+                Spacer()
+            }
         }
+
     }
 }
 
-#Preview {
-    ContentView()
-}
+//#Preview {
+//    ContentView()
+//}

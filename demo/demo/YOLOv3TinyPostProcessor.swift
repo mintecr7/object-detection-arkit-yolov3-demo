@@ -31,12 +31,27 @@ final class YOLOv3TinyPostProcessor {
     private let scoreThreshold: Float
     private let nmsThreshold: CGFloat
 
-    init(scoreThreshold: Float = 0.45, nmsThreshold: CGFloat = 0.45) {
+    init(scoreThreshold: Float = 0.20, nmsThreshold: CGFloat = 0.45) {
         self.scoreThreshold = scoreThreshold
         self.nmsThreshold = nmsThreshold
     }
 
     func process(_ observations: [VNObservation]) -> [Detection] {
+        let feats = observations.compactMap { $0 as? VNCoreMLFeatureValueObservation }
+
+            if !feats.isEmpty {
+                for f in feats {
+                    if let arr = f.featureValue.multiArrayValue {
+                        print("YOLO out:", f.featureName,
+                              "shape:", arr.shape,
+                              "strides:", arr.strides,
+                              "type:", arr.dataType)
+                    } else {
+                        print("YOLO out:", f.featureName, "non-multiarray:", f.featureValue.type)
+                    }
+                }
+            }
+
         let arrays = observations.compactMap { $0 as? VNCoreMLFeatureValueObservation }
             .compactMap { $0.featureValue.multiArrayValue }
 
@@ -109,9 +124,10 @@ final class YOLOv3TinyPostProcessor {
                     // YOLO: bw = anchor * exp(tw) / inputSize
                     // We can normalize by grid scale using W/H directly:
                     // input is 416, stride = 416 / W
-                    let stride = 416.0 / Float(W)
-                    let bw = (aw * exp(tw)) / (stride * Float(W)) // equivalent to /416
-                    let bh = (ah * exp(th)) / (stride * Float(H))
+                    let inputSize: Float = 416.0
+                    let bw = (aw * exp(tw)) / inputSize
+                    let bh = (ah * exp(th)) / inputSize
+
 
                     let x = CGFloat(bx - bw / 2)
                     let y = CGFloat(by - bh / 2)
@@ -143,42 +159,46 @@ final class YOLOv3TinyPostProcessor {
 /// - [1, H, W, 255]  (NHWC)
 private struct MultiArrayLayout {
     let arr: MLMultiArray
-    let ptr: UnsafeMutablePointer<Float32>
 
     let gridH: Int
     let gridW: Int
     let channels: Int
 
     // Strides in elements
-    let s0: Int, s1: Int, s2: Int, s3: Int
-    // Indices mapping
-    enum Kind { case nchw, nhwc }
+    let strides: [Int]
+    let shape: [Int]
+
+    enum Kind { case nchw, nhwc, chw, hwc }
     let kind: Kind
 
     init?(_ arr: MLMultiArray) {
-        guard arr.dataType == .float32 else { return nil }
         self.arr = arr
-        self.ptr = UnsafeMutablePointer<Float32>(OpaquePointer(arr.dataPointer))
+        self.shape = arr.shape.map { Int(truncating: $0) }
+        self.strides = arr.strides.map { Int(truncating: $0) }
 
-        let shape = arr.shape.map { Int(truncating: $0) }
-        let strides = arr.strides.map { Int(truncating: $0) }
-
-        guard shape.count == 4 else { return nil }
-        (s0, s1, s2, s3) = (strides[0], strides[1], strides[2], strides[3])
-
-        // Detect where "255" is (channels)
-        if shape[1] == 255 {
-            // [N, C, H, W]
+        // Expected channels = 255 for YOLOv3-tiny heads
+        // Support shapes:
+        // [1,255,H,W], [1,H,W,255], [255,H,W], [H,W,255]
+        if shape.count == 4, shape[1] == 255 {
             kind = .nchw
-            channels = shape[1]
+            channels = 255
             gridH = shape[2]
             gridW = shape[3]
-        } else if shape[3] == 255 {
-            // [N, H, W, C]
+        } else if shape.count == 4, shape[3] == 255 {
             kind = .nhwc
-            channels = shape[3]
+            channels = 255
             gridH = shape[1]
             gridW = shape[2]
+        } else if shape.count == 3, shape[0] == 255 {
+            kind = .chw
+            channels = 255
+            gridH = shape[1]
+            gridW = shape[2]
+        } else if shape.count == 3, shape[2] == 255 {
+            kind = .hwc
+            channels = 255
+            gridH = shape[0]
+            gridW = shape[1]
         } else {
             return nil
         }
@@ -186,15 +206,35 @@ private struct MultiArrayLayout {
 
     @inline(__always)
     func read(gx: Int, gy: Int, c: Int) -> Float {
+        let idx: Int
         switch kind {
         case .nchw:
             // [0, c, gy, gx]
-            let idx = 0*s0 + c*s1 + gy*s2 + gx*s3
-            return ptr[idx]
+            idx = 0*strides[0] + c*strides[1] + gy*strides[2] + gx*strides[3]
         case .nhwc:
             // [0, gy, gx, c]
-            let idx = 0*s0 + gy*s1 + gx*s2 + c*s3
-            return ptr[idx]
+            idx = 0*strides[0] + gy*strides[1] + gx*strides[2] + c*strides[3]
+        case .chw:
+            // [c, gy, gx]
+            idx = c*strides[0] + gy*strides[1] + gx*strides[2]
+        case .hwc:
+            // [gy, gx, c]
+            idx = gy*strides[0] + gx*strides[1] + c*strides[2]
+        }
+
+        switch arr.dataType {
+        case .float32:
+            let p = arr.dataPointer.assumingMemoryBound(to: Float32.self)
+            return Float(p[idx])
+        case .float16:
+            let p = arr.dataPointer.assumingMemoryBound(to: UInt16.self)
+            return Float(Float16(bitPattern: p[idx]))
+        case .double:
+            let p = arr.dataPointer.assumingMemoryBound(to: Double.self)
+            return Float(p[idx])
+        default:
+            // Fallback (slow) – should rarely happen
+            return (arr[[NSNumber(value: idx)]] as? NSNumber)?.floatValue ?? 0
         }
     }
 }

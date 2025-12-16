@@ -18,7 +18,7 @@ struct BoxesOverlay: View {
                 ZStack(alignment: .topLeading) {
                     Rectangle()
                         .path(in: r)
-                        .stroke(lineWidth: 2)
+                        .stroke(Color.green, lineWidth: 2)
 
                     Text("\(d.label) \(Int(d.score * 100))%")
                         .font(.caption2)
