@@ -8,10 +8,11 @@
 
 import Vision
 import CoreML
-import QuartzCore
 import ImageIO
+import QuartzCore
 
 final class YOLOInferenceRunner {
+    private var inFlight = false
     private let vnModel: VNCoreMLModel
     private let request: VNCoreMLRequest
     private let queue = DispatchQueue(label: "ml.yolo.inference", qos: .userInitiated)
@@ -41,15 +42,21 @@ final class YOLOInferenceRunner {
 
         let now = CACurrentMediaTime()
         guard now - lastRunTime >= minInterval else { return }
+        guard !inFlight else { return }
         lastRunTime = now
+        inFlight = true
 
         queue.async {
+            defer { self.inFlight = false }
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
                                                 orientation: orientation,
                                                 options: [:])
             do {
                 try handler.perform([self.request])
-                let dets = self.post.process(self.request.results ?? [])
+                let results = self.request.results ?? []
+                print("VNCoreMLRequest results count:", results.count)
+                
+                let dets = self.post.process(results)
                 DispatchQueue.main.async {
                     completion(dets)
                 }

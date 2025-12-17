@@ -6,14 +6,15 @@
 //
 
 
-import Foundation
+import simd
 import Vision
 import CoreML
+import Foundation
 import CoreGraphics
-import simd
 
 final class YOLOv3TinyPostProcessor {
     // YOLOv3-Tiny uses 2 heads, 3 anchors each, COCO = 80 classes => 85 values per anchor
+    private var didLog = false
     private let numClasses = 80
     private var valuesPerAnchor: Int { numClasses + 5 } // 85
 
@@ -37,6 +38,35 @@ final class YOLOv3TinyPostProcessor {
     }
 
     func process(_ observations: [VNObservation]) -> [Detection] {
+        if !didLog {
+                didLog = true
+                print("Vision observations count =", observations.count)
+                for o in observations {
+                    print(" - type:", String(describing: type(of: o)))
+                    if let f = o as? VNCoreMLFeatureValueObservation,
+                       let arr = f.featureValue.multiArrayValue {
+                        print("   feature:", f.featureName,
+                              "shape:", arr.shape,
+                              "strides:", arr.strides,
+                              "dtype:", arr.dataType)
+                    }
+                }
+            }
+        let ros = observations.compactMap { $0 as? VNRecognizedObjectObservation }
+          if !ros.isEmpty {
+              return ros.compactMap { ro in
+                  guard let top = ro.labels.first else { return nil }
+                  let bb = ro.boundingBox
+                  // Vision BB origin is bottom-left; your overlay assumes top-left
+                  let rect = CGRect(
+                      x: bb.origin.x,
+                      y: 1 - bb.origin.y - bb.height,
+                      width: bb.width,
+                      height: bb.height
+                  )
+                  return Detection(classIndex: -1, label: top.identifier, score: Float(top.confidence), rect: rect)
+              }
+          }
         let feats = observations.compactMap { $0 as? VNCoreMLFeatureValueObservation }
 
             if !feats.isEmpty {
@@ -234,7 +264,7 @@ private struct MultiArrayLayout {
             return Float(p[idx])
         default:
             // Fallback (slow) – should rarely happen
-            return (arr[[NSNumber(value: idx)]] as? NSNumber)?.floatValue ?? 0
+            return (arr[[NSNumber(value: idx)]] ).floatValue
         }
     }
 }
